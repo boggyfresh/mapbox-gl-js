@@ -11,13 +11,15 @@ exports.rendered = function(sourceCache, styleLayers, queryGeometry, params, zoo
         const tileIn = tilesIn[r];
         if (!tileIn.tile.featureIndex) continue;
 
-        renderedFeatureLayers.push(tileIn.tile.featureIndex.query({
-            queryGeometry: tileIn.queryGeometry,
-            scale: tileIn.scale,
-            tileSize: tileIn.tile.tileSize,
-            bearing: bearing,
-            params: params
-        }, styleLayers));
+        renderedFeatureLayers.push({
+            wrappedTileID: tileIn.coord.wrapped().id,
+            queryResults: tileIn.tile.featureIndex.query({
+                queryGeometry: tileIn.queryGeometry,
+                scale: tileIn.scale,
+                tileSize: tileIn.tile.tileSize,
+                bearing: bearing,
+                params: params
+            }, styleLayers)});
     }
     return mergeRenderedFeatureLayers(renderedFeatureLayers);
 };
@@ -49,21 +51,38 @@ function sortTilesIn(a, b) {
 }
 
 function mergeRenderedFeatureLayers(tiles) {
-    const result = tiles[0] || {};
-    for (let i = 1; i < tiles.length; i++) {
-        const tile = tiles[i];
-        for (const layerID in tile) {
-            const tileFeatures = tile[layerID];
+    // Avoid merge work for common cases
+    if (!tiles.length) {
+        return {};
+    } else if (tiles.length === 1) {
+        return tiles[0].queryResults;
+    }
+
+    // Merge results from all tiles, but if two tiles share the same
+    // wrapped ID, don't duplicate features between the two tiles
+    const result = {};
+    const wrappedIDFeatureMap = {};
+    for (const tile of tiles) {
+        const queryResults = tile.queryResults;
+        const wrappedID = tile.wrappedTileID;
+        const wrappedIDFeatures = wrappedIDFeatureMap[wrappedID] = wrappedIDFeatureMap[wrappedID] || {};
+        for (const layerID in queryResults) {
+            const tileFeatures = queryResults[layerID];
             let resultFeatures = result[layerID];
             if (resultFeatures === undefined) {
                 resultFeatures = result[layerID] = tileFeatures;
+                tileFeatures.forEach((tileFeature) => {
+                    wrappedIDFeatures[tileFeature.id] = true;
+                });
             } else {
-                for (let f = 0; f < tileFeatures.length; f++) {
-                    resultFeatures.push(tileFeatures[f]);
+                for (const tileFeature of tileFeatures) {
+                    if (!tileFeature.id || !wrappedIDFeatures[tileFeature.id]) {
+                        wrappedIDFeatures[tileFeature.id] = true;
+                        resultFeatures.push(tileFeature);
+                    }
                 }
             }
         }
     }
     return result;
 }
-
